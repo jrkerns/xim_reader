@@ -17,14 +17,17 @@
 # Created on: 12:04:06 PM, Sept. 26, 2014
 # Authors: Pankaj Mishra and Thanos Etmektzoglou
 #
-# Modified on : 10:58:045 AM, Jul. 24, 2015
-# Modified by Nilesh Gorle
+# Updated on : 16:45:045 PM, Dec. 24, 2015
+# Updated By by Nilesh Gorle
 
 import textwrap
 import os
+import copy
+import re
 import struct, sys, numpy as np
 from matplotlib import pyplot as plt
 from argparse import ArgumentParser
+from docutils.parsers.rst.directives import flag
 
 LINE_SPACE = 150
 XIMREADER_FILENAME = "XimReaderData.txt"
@@ -73,7 +76,7 @@ class XimFileInfo(object):
         thead = "".join(thead)
         self.ximFile.writelines(thead + "\n" + "="*LINE_SPACE)
 
-        FormatIdentifier = (self.headerDataDict["FormatIdentifier"]).replace("\x00", "")
+        FormatIdentifier = (self.headerDataDict["FormatIdentifier"]).replace("\x00", "").replace("\u0000", "")
         tbody = FormatIdentifier.center(20), "|", \
                 str(self.headerDataDict.get("FormatVersion")).center(20), "|", \
                 str(self.headerDataDict.get("Width")).center(10), "|", \
@@ -113,19 +116,15 @@ class XimFileInfo(object):
         '''
         saving property information
         '''
-        DATATYPE_DICT = {0: "Integer", 1: "Double", 2: "String",
-                         4: "Double Array", 5: "Integer Array"}
-
         title = "Property Data".center(LINE_SPACE)
         self.ximFile.writelines("\n"*4 + "="*LINE_SPACE + "\n" + title + "\n" + "="*LINE_SPACE + "\n")
 
-        thead = "Length".center(6), "|", "Name".center(50), "|", \
-                "Type".center(15), "|", "Value".center(25)
+        thead = "Name".center(57), "|", "Value".center(40)
         thead = "".join(thead)
         self.ximFile.writelines(thead + "\n" + "="*LINE_SPACE + "\n")
 
         tbody = ""
-        for length, name, ptype, value in self.propertyDataList:
+        for _, name, _, value in self.propertyDataList:
             if isinstance(value, str):
                 value = value.replace('\n', ' ').replace('\r', ',')
             value = str(value)
@@ -137,23 +136,20 @@ class XimFileInfo(object):
                     pretty_xml_as_string = xml_string.toprettyxml()
                     valList = pretty_xml_as_string.split("\n")
 
-                    tbody = (str(length).center(6) + "|" + str(name).center(50) + "|" + \
-                      (DATATYPE_DICT[ptype]).center(15) + "|\n")
+                    tbody = (str(name).center(57) + "|\n")
 
                     for i in xrange(len(valList)):
-                        tbody += (" "*73 + "|" + (valList[i]).center(25) + "\n")
+                        tbody += (" "*57 + "|" + (valList[i]).center(20) + "\n")
                 else:
                     valList = textwrap.wrap(str(value), width=80)
 
-                    tbody = (str(length).center(6) + "|" + str(name).center(50) + "|" + \
-                             (DATATYPE_DICT[ptype]).center(15) + "|\n")
+                    tbody = (str(name).center(57) + "|\n")
 
                     for i in xrange(len(valList)):
-                            tbody += (" "*73 + "|  " + (valList[i]).center(25) + "\n")
+                            tbody += (" "*57 + "|  " + (valList[i]).center(40) + "\n")
 
             else:
-                tbody = (str(length).center(6) + "|" + str(name).center(50) + "|" + \
-                        (DATATYPE_DICT[ptype]).center(15) + "|" + str(value).center(25))
+                tbody = (str(name).center(57) + "|" + str(value).center(40))
 
             self.ximFile.writelines(tbody + "\n" + "-"*LINE_SPACE + "\n")
 
@@ -196,7 +192,7 @@ class XimReader():
         Open the given file 
         :param filename:
         '''
-    self.filename = filename
+        self.filename = filename
         self.openFile()
 
     def openFile(self):
@@ -268,70 +264,129 @@ class XimReader():
         """
         Get property data for images    
         """
+        propertyNameFlag = False
+        byteData = self.f.readlines()
+        byteData = "".join(byteData)
+        currPos = 0
+
         self.propertyDataList = []
 
         value = None
         propertyValList = []
 
-        propertyCount = struct.unpack('<i', self.f.read(4))[0]
+        propertyCount = struct.unpack('<i', byteData[currPos:currPos + 4])[0]
+        currPos += 4
 
         PROPERTY_TYPE_DICT = {0 : ('<i', 4),
                               1 : ('<d', 8),
                               2 : ('<i', 4),
                               }
 
-        def get_value(fmt, fmt_length):
+        def check_propertyname_string(currPos, length=100, is_array=False):
             """
-            Getting integer or double value and appending it into property value list
+            Check If property string exist after value.
+            Condition:
+            1. If string starts from '/x00/x00/x00', means It can contain property name at the end
+            2. If string endss with '/x00/x00/x00' and not starts with special character, means It contains string but only if length is greater than 2
+            """
+            tempString = str(byteData[currPos:currPos + length])
+            try:
+                if tempString.startswith("\x00\x00\x00"):
+                    propertyName = re.findall("[a-zA-Z0-9]+", byteData[currPos + 3:currPos + length])[0]
+                    propertyNameLength = len(str(propertyName))
+                    currPos += (propertyNameLength + 3)
+                    return True, currPos, propertyName, propertyNameLength
+                elif (tempString.isalpha() or tempString.endswith("\x00\x00\x00")) and is_array\
+                    and not tempString.startswith("<"):
+                    propNames = re.findall("[a-zA-Z0-9_]+", byteData[currPos:currPos + length + 100])
+                    propertyName = propNames[0] if len(str(propNames[0])) > 2 else propNames[1] if len(str(propNames[1])) > 2 else None
+                    nextString = str(byteData[currPos + length:currPos + length + 4]).replace("\\x", "")
+                    morethanTwoLetterRegex = re.compile(ur'[a-zA-Z]{2,}')
+
+                    if propertyName is not None and propertyName[0].isalpha():
+                        if (re.search(morethanTwoLetterRegex, tempString) or re.search(morethanTwoLetterRegex, nextString)):
+                            propertyNameLength = len(str(propertyName))
+                            currPos += (propertyNameLength + length) if not tempString.isalpha() else propertyNameLength
+                            return True, currPos, propertyName, propertyNameLength
+            except IndexError:  # IndexError, If re.findall get blank [] and we take index 0 or 1
+                pass
+
+            return False, None, None, None
+
+        def get_value(currPos, fmt, fmt_length):
+            """
+            Extracting Integer value or double value (as per format) and checking for property exist
             """
             try:
-                value = struct.unpack(fmt, self.f.read(fmt_length))[0]
-                propertyValList.append(value)
-                return value
+                is_property_exist, cp, pn, pnl = check_propertyname_string(currPos=currPos,
+                                                                           length=fmt_length,
+                                                                           is_array=True)
+                if is_property_exist:
+                    return is_property_exist, cp, pn, pnl
+                else:
+                    value = struct.unpack(fmt, byteData[currPos:currPos + fmt_length])[0]
+                    currPos += fmt_length
+                    propertyValList.append(value)
+                    return False, currPos, None, None
             except:
-                return None
+                return None, currPos + fmt_length, None, None
 
         if propertyCount:
             for i in xrange(propertyCount):
-                if not value:
-                    propertyNameLength = struct.unpack('<i', self.f.read(4))[0]
+                if not propertyNameFlag:
+                    propertyNameLength = struct.unpack('<i', byteData[currPos:currPos + 4])[0]
+                    currPos += 4
+                    propertyName = struct.unpack('<%is' % propertyNameLength , byteData[currPos:currPos + propertyNameLength])[0]
+                    currPos += propertyNameLength
                 else:
-                    propertyNameLength = value
-                    value = None
+                    propertyNameFlag = False
                     propertyValList = []
 
-                propertyName = struct.unpack('<%is' % propertyNameLength , self.f.read(propertyNameLength))[0]
-                propertyType = struct.unpack('<i', self.f.read(4))[0]
-
+                # Sometimes, length get too long integer, in that case, we loop it by increasing current position by 4, until 2 digit value  gets.
+                propertyType = struct.unpack('<i', byteData[currPos:currPos + 4])[0]
+                currPos += 4
+                while len(str(propertyType)) > 2:
+                    propertyType = struct.unpack('<i', byteData[currPos:currPos + 4])[0]
+                    currPos += 4
 
                 if propertyType in PROPERTY_TYPE_DICT.keys():
                     propertyValue = struct.unpack(PROPERTY_TYPE_DICT[propertyType][0],
-                                                   self.f.read(PROPERTY_TYPE_DICT[propertyType][1]))[0]
+                                                   byteData[currPos: currPos + PROPERTY_TYPE_DICT[propertyType][1]])[0]
+
+                    currPos += PROPERTY_TYPE_DICT[propertyType][1]
 
                     if propertyType == 2:
-                        propertyValue = struct.unpack('<%is' % propertyValue, self.f.read(propertyValue))[0]
+                        temp = struct.unpack('<%is' % propertyValue, byteData[currPos:currPos + propertyValue])[0]
+                        currPos += propertyValue
+                        propertyValue = temp
 
                     rstTpl = propertyNameLength, propertyName, propertyType, propertyValue
                     self.propertyDataList.append(rstTpl)
 
+                    flag, cp, propName, propLen = check_propertyname_string(currPos)
+                    if flag:
+                        propertyNameFlag, currPos, propertyName, propertyNameLength = flag, cp, propName, propLen
+
                 elif propertyType in [4, 5]:
                         if propertyType == 4:
-                            fmt, fmt_length = '<d', 8
+                            fmt, fmt_length = '<d', 8  # Double Array
                         else:
-                            fmt, fmt_length = '<i', 4
+                            fmt, fmt_length = '<i', 4  # Interger Array
 
-                        value = get_value(fmt, fmt_length)
-                        while value != None:
-                            if len(str(value)) == 2:
-                                break
 
-                            value = get_value(fmt, fmt_length)
+                        stop = False  # flag, to check end of array.
+
+                        # Loop till, stop gets True. It means, Pointer seeks the end of array
+                        stop, cp, pn, pnl = get_value(currPos, fmt, fmt_length)
+                        while not stop:
+                            stop, cp, pn, pnl = get_value(cp, fmt, fmt_length)
 
                         rstTpl = propertyNameLength, propertyName, propertyType, propertyValList
-
                         self.propertyDataList.append(rstTpl)
 
-                        if not value:
+                        if stop:
+                            currPos, propertyNameFlag, propertyName, propertyNameLength = cp, True, pn, pnl
+                        else:
                             break
                 else:
                     print "Format Type not valid"
@@ -507,3 +562,4 @@ def main():
 if __name__ == "__main__":
     # Let's get started
     main()
+
