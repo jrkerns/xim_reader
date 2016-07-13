@@ -34,3 +34,7 @@ optional arguments:
 
 
 **Developer Mode is intended for non-clinical use only and is NOT cleared for use on humans**
+
+
+Matlab Version
+There is also a separate xim image reader for Matlab. Because it is based on the .NET framework, it can only be used on Windows machines.
