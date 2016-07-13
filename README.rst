@@ -41,4 +41,4 @@ optional arguments:
 
 Matlab Version
 ==============
-There is also a separate xim image reader for Matlab in the Downloads section. Because it is based on the .NET framework, it can only be used on Windows machines.
+There is also a separate xim image reader for Matlab in the Downloads section. Because it is based on the .NET framework, it can only be used on Windows machines. See the included readme.txt for more details.
